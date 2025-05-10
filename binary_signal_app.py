@@ -9,12 +9,25 @@ from zoneinfo import ZoneInfo
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 import joblib
+import os
 
-# ─── AUTO-REFRESH EVERY SECOND ─────────────────────────
-st_autorefresh(interval=1000, limit=None, key="timer_refresh")
+# ─── AUTO REFRESH ──────────────────────────────────────
+st_autorefresh(interval=1000, limit=None, key="refresh")
 
-# ─── API KEY ───────────────────────────────────────────
+# ─── API KEYS ──────────────────────────────────────────
 twelve_key = "4d5b1e81f9314e28a7ee285497d3b273"
+telegram_token = "7557174507:AAFSmFW5nxJ-fLOPS-B_wi0uT5wkQ5-PEx8"
+telegram_chat_id = "1278635048"
+
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+    payload = {"chat_id": telegram_chat_id, "text": message}
+    try:
+        response = requests.post(url, data=payload, timeout=10)
+        if response.status_code != 200:
+            st.warning(f"⚠️ Telegram message failed: {response.text}")
+    except Exception as e:
+        st.warning(f"⚠️ Telegram error: {e}")
 
 # ─── SYMBOL SELECT ─────────────────────────────────────
 symbol_map = {
@@ -28,7 +41,7 @@ symbol = st.selectbox("Choose a forex pair:", list(symbol_map.keys()))
 
 # ─── FETCH HISTORICAL DATA ─────────────────────────────
 @st.cache_data(ttl=300)
-def fetch_twelve(sym_key):
+def fetch_data(sym_key):
     sym = symbol_map[sym_key]
     url = f"https://api.twelvedata.com/time_series?symbol={sym}&interval=5min&outputsize=500&apikey={twelve_key}"
     r = requests.get(url, timeout=10)
@@ -43,7 +56,7 @@ def fetch_twelve(sym_key):
     df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
     df = df.sort_index()
 
-    # Add indicators
+    # Indicators
     df["EMA9"] = ta.trend.ema_indicator(df["Close"], window=9)
     df["EMA21"] = ta.trend.ema_indicator(df["Close"], window=21)
     df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
@@ -61,34 +74,46 @@ def fetch_twelve(sym_key):
     return df
 
 # ─── TITLE ─────────────────────────────────────────────
-st.title("🤖 Binary Trading Signal Bot with Machine Learning (5-min Forex)")
+st.title("🤖 Binary Trading Signal Bot with ML + Alerts + Backtest")
 
-df = fetch_twelve(symbol)
+df = fetch_data(symbol)
 if df is None:
-    st.error("❌ Failed to fetch data from Twelve Data API.")
+    st.error("❌ Failed to fetch data.")
     st.stop()
 
-# ─── FEATURES & TARGET ─────────────────────────────────
 features = ["EMA9", "EMA21", "RSI", "MACD", "BB_upper", "BB_lower", "Close", "Open"]
 X = df[features]
 y = df["Target"]
 
-# ─── TRAIN ML MODEL ────────────────────────────────────
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X_train, y_train)
+# ─── MODEL FILE PATH ───────────────────────────────────
+model_path = f"{symbol.replace('/', '')}_rf_model.pkl"
 
-# ─── PREDICT SIGNALS ───────────────────────────────────
+# ─── RETRAIN BUTTON ────────────────────────────────────
+if st.button("🔁 Retrain model now"):
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    joblib.dump(model, model_path)
+    st.success("✅ Model retrained successfully!")
+
+# ─── LOAD OR TRAIN MODEL ───────────────────────────────
+if os.path.exists(model_path):
+    model = joblib.load(model_path)
+else:
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    joblib.dump(model, model_path)
+
+# ─── PREDICTION & SIGNAL ───────────────────────────────
 df["ML_Signal"] = model.predict(X)
 df["ML_Signal"] = df["ML_Signal"].map({1: "CALL", 0: "PUT"})
-df["Confidence"] = model.predict_proba(X)[:, 1]  # Probability of CALL
-
-# ─── ACCURACY ──────────────────────────────────────────
+df["Confidence"] = model.predict_proba(X)[:, 1]
 df["Actual"] = df["Target"].map({1: "CALL", 0: "PUT"})
 df["Correct"] = df["ML_Signal"] == df["Actual"]
 ml_accuracy = df["Correct"].mean() * 100
 
-# ─── SESSION ACCURACY TRACKING ─────────────────────────
+# ─── SESSION TRACKING ──────────────────────────────────
 if "ml_history" not in st.session_state:
     st.session_state.ml_history = []
 
@@ -105,31 +130,59 @@ if not st.session_state.ml_history or st.session_state.ml_history[-1]['time'] !=
         "time": last_time, "signal": last_signal, "actual": last_actual,
         "outcome": last_outcome, "accuracy": session_acc
     })
+
+    # ─── SEND TELEGRAM ALERT ───────────────────────────
+    signal_msg = (
+        f"🔔 New Signal for {symbol}\n"
+        f"Signal: {last_signal}\n"
+        f"Confidence: {df.iloc[-1]['Confidence']:.2%}\n"
+        f"Time: {last_time.strftime('%H:%M %d-%m-%Y')}"
+    )
+    send_telegram_message(signal_msg)
 else:
     session_acc = st.session_state.ml_history[-1]["accuracy"]
 
-# ─── COUNTDOWN TIMER ───────────────────────────────────
+# ─── TIMER TO NEXT CANDLE ──────────────────────────────
 now = datetime.now(ZoneInfo("Asia/Kolkata"))
 minute = (now.minute // 5) * 5
 next_candle_time = now.replace(minute=minute, second=0, microsecond=0) + timedelta(minutes=5)
 remaining = (next_candle_time - now).total_seconds()
 minutes, seconds = divmod(int(remaining), 60)
 
-# ─── DISPLAY METRICS ───────────────────────────────────
+# ─── METRICS + COLOR CODES ─────────────────────────────
 st.metric("⏳ Time to next candle", f"{minutes}m {seconds}s")
 st.metric("📍 ML Latest Signal", last_signal)
 st.metric("🧠 Confidence", f"{df.iloc[-1]['Confidence']:.2%}")
-st.metric("📈 ML Model Accuracy", f"{ml_accuracy:.2f}%", help="Accuracy on historical data")
-st.metric("🧪 Session Accuracy", f"{session_acc:.2f}%", help="Live accuracy this session")
+
+acc_color = "green" if ml_accuracy >= 70 else "orange" if ml_accuracy >= 50 else "red"
+st.markdown(f"### <span style='color:{acc_color}'>📈 Model Accuracy: {ml_accuracy:.2f}%</span>", unsafe_allow_html=True)
+
+acc2_color = "green" if session_acc >= 70 else "orange" if session_acc >= 50 else "red"
+st.markdown(f"### <span style='color:{acc2_color}'>🧪 Session Accuracy: {session_acc:.2f}%</span>", unsafe_allow_html=True)
 
 # ─── CHARTS ────────────────────────────────────────────
 history_df = pd.DataFrame(st.session_state.ml_history).set_index("time")
 st.line_chart(history_df["accuracy"], height=200)
 
+# ─── BACKTEST BUTTON ───────────────────────────────────
+if st.button("🕰️ Run Backtest on historical data"):
+    backtest_df = df.copy()
+    backtest_df["Signal_Return"] = backtest_df["Target"].map({1: 1, 0: -1}) * (backtest_df["ML_Signal"].map({"CALL": 1, "PUT": -1}))
+    total_signals = len(backtest_df)
+    correct_signals = (backtest_df["Signal_Return"] == 1).sum()
+    accuracy_bt = correct_signals / total_signals * 100
+    net_pips = (backtest_df["Close"].diff() * backtest_df["Signal_Return"].shift(1)).fillna(0).sum()
+
+    st.subheader("🔍 Backtest Results")
+    st.write(f"Total Signals: {total_signals}")
+    st.write(f"Correct Signals: {correct_signals}")
+    st.write(f"Backtest Accuracy: {accuracy_bt:.2f}%")
+    st.write(f"Net Pips: {net_pips:.2f}")
+    st.line_chart(backtest_df["Signal_Return"].cumsum())
+
 with st.expander("📊 Show recent data & predictions"):
     st.dataframe(df.tail(10))
     st.dataframe(history_df.tail(10))
 
-# ─── DOWNLOAD ──────────────────────────────────────────
 csv = history_df.to_csv().encode("utf-8")
 st.download_button("Download session history", csv, file_name="ml_session_history.csv", mime="text/csv")
