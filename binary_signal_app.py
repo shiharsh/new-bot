@@ -9,10 +9,9 @@ from zoneinfo import ZoneInfo
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 import joblib
-import os
 
-# ─── AUTO REFRESH ──────────────────────────────────────
-st_autorefresh(interval=1000, limit=None, key="refresh")
+# ─── AUTO-REFRESH EVERY SECOND ─────────────────────────
+st_autorefresh(interval=1000, limit=None, key="timer_refresh")
 
 # ─── API KEY ───────────────────────────────────────────
 twelve_key = "4d5b1e81f9314e28a7ee285497d3b273"
@@ -29,7 +28,7 @@ symbol = st.selectbox("Choose a forex pair:", list(symbol_map.keys()))
 
 # ─── FETCH HISTORICAL DATA ─────────────────────────────
 @st.cache_data(ttl=300)
-def fetch_data(sym_key):
+def fetch_twelve(sym_key):
     sym = symbol_map[sym_key]
     url = f"https://api.twelvedata.com/time_series?symbol={sym}&interval=5min&outputsize=500&apikey={twelve_key}"
     r = requests.get(url, timeout=10)
@@ -62,46 +61,34 @@ def fetch_data(sym_key):
     return df
 
 # ─── TITLE ─────────────────────────────────────────────
-st.title("🤖 Binary Trading Signal Bot with ML + Alerts")
+st.title("🤖 Binary Trading Signal Bot with Machine Learning (5-min Forex)")
 
-df = fetch_data(symbol)
+df = fetch_twelve(symbol)
 if df is None:
-    st.error("❌ Failed to fetch data.")
+    st.error("❌ Failed to fetch data from Twelve Data API.")
     st.stop()
 
+# ─── FEATURES & TARGET ─────────────────────────────────
 features = ["EMA9", "EMA21", "RSI", "MACD", "BB_upper", "BB_lower", "Close", "Open"]
 X = df[features]
 y = df["Target"]
 
-# ─── MODEL FILE PATH ───────────────────────────────────
-model_path = f"{symbol.replace('/', '')}_rf_model.pkl"
+# ─── TRAIN ML MODEL ────────────────────────────────────
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
 
-# ─── RETRAIN BUTTON ────────────────────────────────────
-if st.button("🔁 Retrain model now"):
-    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    joblib.dump(model, model_path)
-    st.success("✅ Model retrained successfully!")
-
-# ─── LOAD OR TRAIN MODEL ───────────────────────────────
-if os.path.exists(model_path):
-    model = joblib.load(model_path)
-else:
-    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, shuffle=False)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    joblib.dump(model, model_path)
-
-# ─── PREDICTION & SIGNAL ───────────────────────────────
+# ─── PREDICT SIGNALS ───────────────────────────────────
 df["ML_Signal"] = model.predict(X)
 df["ML_Signal"] = df["ML_Signal"].map({1: "CALL", 0: "PUT"})
-df["Confidence"] = model.predict_proba(X)[:, 1]
+df["Confidence"] = model.predict_proba(X)[:, 1]  # Probability of CALL
+
+# ─── ACCURACY ──────────────────────────────────────────
 df["Actual"] = df["Target"].map({1: "CALL", 0: "PUT"})
 df["Correct"] = df["ML_Signal"] == df["Actual"]
 ml_accuracy = df["Correct"].mean() * 100
 
-# ─── SESSION TRACKING ──────────────────────────────────
+# ─── SESSION ACCURACY TRACKING ─────────────────────────
 if "ml_history" not in st.session_state:
     st.session_state.ml_history = []
 
@@ -121,23 +108,19 @@ if not st.session_state.ml_history or st.session_state.ml_history[-1]['time'] !=
 else:
     session_acc = st.session_state.ml_history[-1]["accuracy"]
 
-# ─── TIMER TO NEXT CANDLE ──────────────────────────────
+# ─── COUNTDOWN TIMER ───────────────────────────────────
 now = datetime.now(ZoneInfo("Asia/Kolkata"))
 minute = (now.minute // 5) * 5
 next_candle_time = now.replace(minute=minute, second=0, microsecond=0) + timedelta(minutes=5)
 remaining = (next_candle_time - now).total_seconds()
 minutes, seconds = divmod(int(remaining), 60)
 
-# ─── METRICS + COLOR CODES ─────────────────────────────
+# ─── DISPLAY METRICS ───────────────────────────────────
 st.metric("⏳ Time to next candle", f"{minutes}m {seconds}s")
 st.metric("📍 ML Latest Signal", last_signal)
 st.metric("🧠 Confidence", f"{df.iloc[-1]['Confidence']:.2%}")
-
-acc_color = "green" if ml_accuracy >= 70 else "orange" if ml_accuracy >= 50 else "red"
-st.markdown(f"### <span style='color:{acc_color}'>📈 Model Accuracy: {ml_accuracy:.2f}%</span>", unsafe_allow_html=True)
-
-acc2_color = "green" if session_acc >= 70 else "orange" if session_acc >= 50 else "red"
-st.markdown(f"### <span style='color:{acc2_color}'>🧪 Session Accuracy: {session_acc:.2f}%</span>", unsafe_allow_html=True)
+st.metric("📈 ML Model Accuracy", f"{ml_accuracy:.2f}%", help="Accuracy on historical data")
+st.metric("🧪 Session Accuracy", f"{session_acc:.2f}%", help="Live accuracy this session")
 
 # ─── CHARTS ────────────────────────────────────────────
 history_df = pd.DataFrame(st.session_state.ml_history).set_index("time")
@@ -147,5 +130,6 @@ with st.expander("📊 Show recent data & predictions"):
     st.dataframe(df.tail(10))
     st.dataframe(history_df.tail(10))
 
+# ─── DOWNLOAD ──────────────────────────────────────────
 csv = history_df.to_csv().encode("utf-8")
 st.download_button("Download session history", csv, file_name="ml_session_history.csv", mime="text/csv")
