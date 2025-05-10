@@ -25,7 +25,7 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
     payload = {"chat_id": telegram_chat_id, "text": message}
     try:
-        requests.post(url, data=payload, timeout=10)
+        response = requests.post(url, data=payload, timeout=10)
     except Exception as e:
         st.warning(f"⚠️ Telegram error: {e}")
 
@@ -35,7 +35,7 @@ def send_telegram_photo(photo_path, caption=""):
         payload = {"chat_id": telegram_chat_id, "caption": caption}
         files = {"photo": photo}
         try:
-            requests.post(url, data=payload, files=files, timeout=10)
+            response = requests.post(url, data=payload, files=files, timeout=10)
         except Exception as e:
             st.warning(f"⚠️ Telegram photo error: {e}")
 
@@ -121,6 +121,7 @@ for symbol in selected_symbols:
     last_actual = df.iloc[-1]["Actual"]
     last_outcome = int(last_signal == last_actual)
 
+    # SESSION STATE FOR EACH SYMBOL
     if f"{symbol}_history" not in st.session_state:
         st.session_state[f"{symbol}_history"] = []
 
@@ -134,6 +135,7 @@ for symbol in selected_symbols:
             "confidence": last_conf
         })
 
+        # ─── SEND TELEGRAM IF CONF >=70% & ACC >=70% ────
         if last_conf >= 0.70 and ml_accuracy >= 70:
             chart_path = f"chart_{symbol.replace('/', '')}.png"
             mpf.plot(
@@ -159,13 +161,13 @@ for symbol in selected_symbols:
     history_df = pd.DataFrame(st.session_state[f"{symbol}_history"]).set_index("time")
     st.line_chart(history_df["accuracy"], height=150)
 
+    # ─── BACKTEST SECTION ─────────────────────────────
     if f"{symbol}_do_backtest" not in st.session_state:
-    st.session_state[f"{symbol}_do_backtest"] = False
+        st.session_state[f"{symbol}_do_backtest"] = False
 
-st.session_state[f"{symbol}_do_backtest"] = st.checkbox(f"🕰️ Backtest {symbol}", key=f"backtest_{symbol}")
+    st.session_state[f"{symbol}_do_backtest"] = st.checkbox(f"🕰️ Backtest {symbol}", key=f"backtest_{symbol}")
 
-if st.session_state[f"{symbol}_do_backtest"]:
-
+    if st.session_state[f"{symbol}_do_backtest"]:
         backtest_df = df.copy()
         backtest_df["Pip_Return"] = (backtest_df["Close"] - backtest_df["Open"]) * backtest_df["ML_Signal"].map({"CALL": 1, "PUT": -1})
         backtest_df["Cumulative"] = backtest_df["Pip_Return"].cumsum()
@@ -190,7 +192,6 @@ if st.session_state[f"{symbol}_do_backtest"]:
 now = datetime.now(ZoneInfo("Asia/Kolkata"))
 minute = (now.minute // 5) * 5
 next_candle_time = now.replace(minute=minute, second=0, microsecond=0) + timedelta(minutes=5)
-remaining = (next_candle_time - now).total_seconds()
-minutes, seconds = divmod(int(remaining), 60)
-st.metric("⏳ Next candle in", f"{minutes}m {seconds}s")
-
+remaining = (next_candle_time - now
+::contentReference[oaicite:0]{index=0}
+ 
