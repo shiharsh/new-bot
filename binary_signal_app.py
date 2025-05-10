@@ -159,7 +159,13 @@ for symbol in selected_symbols:
     history_df = pd.DataFrame(st.session_state[f"{symbol}_history"]).set_index("time")
     st.line_chart(history_df["accuracy"], height=150)
 
-    if st.button(f"🕰️ Backtest {symbol}", key=symbol):
+    if f"{symbol}_do_backtest" not in st.session_state:
+    st.session_state[f"{symbol}_do_backtest"] = False
+
+st.session_state[f"{symbol}_do_backtest"] = st.checkbox(f"🕰️ Backtest {symbol}", key=f"backtest_{symbol}")
+
+if st.session_state[f"{symbol}_do_backtest"]:
+
         backtest_df = df.copy()
         backtest_df["Pip_Return"] = (backtest_df["Close"] - backtest_df["Open"]) * backtest_df["ML_Signal"].map({"CALL": 1, "PUT": -1})
         backtest_df["Cumulative"] = backtest_df["Pip_Return"].cumsum()
