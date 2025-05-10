@@ -1,0 +1,8 @@
+streamlit
+yfinance
+pandas
+streamlit-autorefresh
+ta
+joblib
+requests
+scikit-learn
