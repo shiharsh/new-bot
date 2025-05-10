@@ -1,5 +1,3 @@
-# forex_bot.py
-
 import streamlit as st
 import pandas as pd
 import requests
@@ -15,14 +13,15 @@ import os
 import mplfinance as mpf
 import matplotlib.pyplot as plt
 
-# ─── AUTO REFRESH ───────────────────────────────
+# ─── LOAD ENV VARS ──────────────────────────────────────
+twelve_key = os.getenv("TWELVE_DATA_API_KEY")
+telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+# ─── AUTO REFRESH ──────────────────────────────────────
 st_autorefresh(interval=1000, limit=None, key="refresh")
 
-# ─── API KEYS (HARDCODED FOR TESTING) ───────────
-twelve_key = "4d5b1e81f9314e28a7ee285497d3b273"
-telegram_token = "7557174507:AAFSmFW5nxJ-fLOPS-B_wi0uT5wkQ5-PEx8"
-telegram_chat_id = "1278635048"
-
+# ─── TELEGRAM SENDERS ──────────────────────────────────
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
     payload = {"chat_id": telegram_chat_id, "text": message}
@@ -41,7 +40,7 @@ def send_telegram_photo(photo_path, caption=""):
         except Exception as e:
             st.warning(f"⚠️ Telegram photo error: {e}")
 
-# ─── SYMBOL LIST ────────────────────────────────
+# ─── SYMBOLS ────────────────────────────────────────────
 symbol_map = {
     "EUR/USD": "EUR/USD",
     "USD/JPY": "USD/JPY",
@@ -51,7 +50,7 @@ symbol_map = {
 }
 selected_symbols = st.multiselect("✅ Choose forex pairs for alerts:", list(symbol_map.keys()), default=["EUR/USD"])
 
-# ─── FETCH DATA ─────────────────────────────────
+# ─── DATA FETCH ─────────────────────────────────────────
 @st.cache_data(ttl=300)
 def fetch_data(sym_key):
     sym = symbol_map[sym_key]
@@ -61,8 +60,7 @@ def fetch_data(sym_key):
     if data.get("status") != "ok" or "values" not in data:
         return None
     df = pd.DataFrame(data["values"])
-    df.rename(columns={"datetime": "Datetime", "open": "Open", "high": "High",
-                       "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
+    df.rename(columns={"datetime": "Datetime", "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
     df["Datetime"] = pd.to_datetime(df["Datetime"])
     df = df.set_index("Datetime").astype(float)
     df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
@@ -84,9 +82,10 @@ def fetch_data(sym_key):
     df.dropna(inplace=True)
     return df
 
-# ─── MAIN APP ───────────────────────────────────
-st.title("🤖 Multi-Symbol Forex Signal Bot + Telegram Alerts + Charts")
+# ─── APP TITLE ──────────────────────────────────────────
+st.title("🚀 Multi-Symbol Forex Bot + Secure Telegram + Scheduled Summaries")
 
+# ─── MAIN LOOP ──────────────────────────────────────────
 for symbol in selected_symbols:
     st.subheader(f"📊 {symbol}")
 
@@ -121,63 +120,68 @@ for symbol in selected_symbols:
     last_actual = df.iloc[-1]["Actual"]
     last_outcome = int(last_signal == last_actual)
 
-    # Session History
-    hist_key = f"{symbol}_history"
-    if hist_key not in st.session_state:
-        st.session_state[hist_key] = []
+    if f"{symbol}_history" not in st.session_state:
+        st.session_state[f"{symbol}_history"] = []
 
-    if not st.session_state[hist_key] or st.session_state[hist_key][-1]['time'] != last_time:
-        total = len(st.session_state[hist_key]) + 1
-        correct = sum(i['outcome'] for i in st.session_state[hist_key]) + last_outcome
+    if not st.session_state[f"{symbol}_history"] or st.session_state[f"{symbol}_history"][-1]['time'] != last_time:
+        total = len(st.session_state[f"{symbol}_history"]) + 1
+        correct = sum(i['outcome'] for i in st.session_state[f"{symbol}_history"]) + last_outcome
         session_acc = (correct / total) * 100
-        st.session_state[hist_key].append({
+        st.session_state[f"{symbol}_history"].append({
             "time": last_time, "signal": last_signal, "actual": last_actual,
             "outcome": last_outcome, "accuracy": session_acc,
             "confidence": last_conf
         })
 
-        # Signal Push Condition
-        if last_conf >= 0.60 and ml_accuracy >= 80:
+        # ─── SEND SIGNAL ALERT ───────────────────────────
+        if last_conf >= 0.6 and ml_accuracy >= 80:
             chart_path = f"chart_{symbol.replace('/', '')}.png"
             mpf.plot(df.tail(30), type='candle', style='charles', mav=(9, 21), savefig=chart_path)
-            caption = (f"🔔 {symbol} Signal\n"
-                       f"Signal: {last_signal}\n"
-                       f"Confidence: {last_conf:.2%}\n"
-                       f"Model Accuracy: {ml_accuracy:.2f}%\n"
-                       f"Time: {last_time.strftime('%H:%M %d-%m-%Y')}")
+            caption = (
+                f"🔔 {symbol} Signal\n"
+                f"Signal: {last_signal}\n"
+                f"Confidence: {last_conf:.2%}\n"
+                f"Model Accuracy: {ml_accuracy:.2f}%\n"
+                f"Time: {last_time.strftime('%H:%M %d-%m-%Y')}"
+            )
             send_telegram_photo(chart_path, caption)
 
     else:
-        session_acc = st.session_state[hist_key][-1]["accuracy"]
+        session_acc = st.session_state[f"{symbol}_history"][-1]["accuracy"]
 
-    acc_color = "green" if ml_accuracy >= 70 else "orange" if ml_accuracy >= 50 else "red"
-    st.metric(f"{symbol} Accuracy", f"{ml_accuracy:.2f}%", delta=f"Session: {session_acc:.2f}%", delta_color="normal" if session_acc >= 70 else "inverse")
+    acc_color = "green" if ml_accuracy >= 80 else "orange" if ml_accuracy >= 50 else "red"
+    st.metric(f"{symbol} Accuracy", f"{ml_accuracy:.2f}%", delta=f"Session: {session_acc:.2f}%", delta_color="normal")
 
-    history_df = pd.DataFrame(st.session_state[hist_key]).set_index("time")
+    history_df = pd.DataFrame(st.session_state[f"{symbol}_history"]).set_index("time")
     st.line_chart(history_df["accuracy"], height=150)
 
-    if st.button(f"🕰️ Backtest {symbol}", key=symbol):
+    if st.button(f"🧪 Backtest {symbol}", key=symbol):
         backtest_df = df.copy()
         backtest_df["Pip_Return"] = (backtest_df["Close"] - backtest_df["Open"]) * backtest_df["ML_Signal"].map({"CALL": 1, "PUT": -1})
         backtest_df["Cumulative"] = backtest_df["Pip_Return"].cumsum()
         st.write(f"Signals: {len(backtest_df)} | Accuracy: {backtest_df['Correct'].mean()*100:.2f}% | Net Pips: {backtest_df['Cumulative'].iloc[-1]:.2f}")
         st.line_chart(backtest_df["Cumulative"], height=200)
 
-        if st.checkbox(f"📩 Send {symbol} daily summary", key=f"summary_{symbol}"):
-            msg = (f"📊 Daily Summary for {symbol}\n"
-                   f"Signals: {len(backtest_df)}\n"
-                   f"Accuracy: {backtest_df['Correct'].mean()*100:.2f}%\n"
-                   f"Net Pips: {backtest_df['Cumulative'].iloc[-1]:.2f}")
-            send_telegram_message(msg)
+    if os.getenv("DAILY_SUMMARY") == "1":
+        backtest_df = df.copy()
+        backtest_df["Pip_Return"] = (backtest_df["Close"] - backtest_df["Open"]) * backtest_df["ML_Signal"].map({"CALL": 1, "PUT": -1})
+        backtest_df["Cumulative"] = backtest_df["Pip_Return"].cumsum()
+        msg = (
+            f"📊 Daily Summary for {symbol}\n"
+            f"Signals: {len(backtest_df)}\n"
+            f"Accuracy: {backtest_df['Correct'].mean()*100:.2f}%\n"
+            f"Net Pips: {backtest_df['Cumulative'].iloc[-1]:.2f}"
+        )
+        send_telegram_message(msg)
 
-    with st.expander(f"📄 {symbol} Recent Predictions"):
+    with st.expander(f"📄 {symbol} Predictions"):
         st.dataframe(df.tail(10))
         st.dataframe(history_df.tail(10))
 
     csv = history_df.to_csv().encode("utf-8")
     st.download_button(f"Download {symbol} history", csv, file_name=f"{symbol.replace('/', '')}_history.csv", mime="text/csv")
 
-# ─── GLOBAL TIMER ───────────────────────────────
+# ─── TIMER ─────────────────────────────────────────────
 now = datetime.now(ZoneInfo("Asia/Kolkata"))
 minute = (now.minute // 5) * 5
 next_candle_time = now.replace(minute=minute, second=0, microsecond=0) + timedelta(minutes=5)
