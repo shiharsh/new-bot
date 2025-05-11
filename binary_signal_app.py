@@ -141,7 +141,7 @@ for symbol in selected_symbols:
         if last_signal in ["CALL", "PUT"] and last_conf >= 0.65 and ml_accuracy >= 85:
             chart_path = f"chart_{symbol.replace('/', '')}.png"
             mpf.plot(df.tail(30), type='candle', style='charles', mav=(9, 21), savefig=chart_path)
-            caption = (f"🔔 {symbol} Signal
+            caption = (f"🔔 {symbol} Signal"
 "
                        f"Signal: {last_signal}
 "
