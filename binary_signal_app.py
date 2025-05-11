@@ -1,4 +1,5 @@
-# ✅ Updated Signal Thresholds:
+
+# ✅ Updated Signal Thresholds and HOLD Logic:
 # Confidence >= 65% and Model Accuracy >= 85%
 
 import streamlit as st
@@ -106,18 +107,22 @@ for symbol in selected_symbols:
     else:
         model = joblib.load(model_path)
 
-    df["ML_Signal"] = model.predict(X)
-    df["Confidence"] = model.predict_proba(X)[:, 1]
+    proba = model.predict_proba(X)[:, 1]
+    df["Confidence"] = proba
+    df["ML_Signal"] = [
+        "CALL" if p >= 0.65 else "PUT" if p <= 0.35 else "HOLD"
+        for p in proba
+    ]
     df["Actual"] = df["Target"].map({1: "CALL", 0: "PUT"})
-    df["ML_Signal"] = df["ML_Signal"].map({1: "CALL", 0: "PUT"})
     df["Correct"] = df["ML_Signal"] == df["Actual"]
+    df.loc[df["ML_Signal"] == "HOLD", "Correct"] = False
     ml_accuracy = df["Correct"].mean() * 100
 
     last_time = df.index[-1]
     last_signal = df.iloc[-1]["ML_Signal"]
     last_conf = df.iloc[-1]["Confidence"]
     last_actual = df.iloc[-1]["Actual"]
-    last_outcome = int(last_signal == last_actual)
+    last_outcome = int(last_signal == last_actual) if last_signal != "HOLD" else 0
 
     if f"{symbol}_history" not in st.session_state:
         st.session_state[f"{symbol}_history"] = []
@@ -132,14 +137,18 @@ for symbol in selected_symbols:
             "confidence": last_conf
         })
 
-        # ✅ Signal Condition: Confidence ≥ 65% and Accuracy ≥ 85%
-        if last_conf >= 0.65 and ml_accuracy >= 85:
+        # ✅ Signal Condition: Only send CALL or PUT with Confidence ≥ 65% and Accuracy ≥ 85%
+        if last_signal in ["CALL", "PUT"] and last_conf >= 0.65 and ml_accuracy >= 85:
             chart_path = f"chart_{symbol.replace('/', '')}.png"
             mpf.plot(df.tail(30), type='candle', style='charles', mav=(9, 21), savefig=chart_path)
-            caption = (f"🔔 {symbol} Signal\n"
-                       f"Signal: {last_signal}\n"
-                       f"Confidence: {last_conf:.2%}\n"
-                       f"Model Accuracy: {ml_accuracy:.2f}%\n"
+            caption = (f"🔔 {symbol} Signal
+"
+                       f"Signal: {last_signal}
+"
+                       f"Confidence: {last_conf:.2%}
+"
+                       f"Model Accuracy: {ml_accuracy:.2f}%
+"
                        f"Time: {last_time.strftime('%H:%M %d-%m-%Y')}")
             send_telegram_photo(chart_path, caption)
     else:
@@ -153,15 +162,19 @@ for symbol in selected_symbols:
 
     if st.button(f"🕰️ Backtest {symbol}", key=symbol):
         backtest_df = df.copy()
+        backtest_df = backtest_df[backtest_df["ML_Signal"] != "HOLD"]
         backtest_df["Pip_Return"] = (backtest_df["Close"] - backtest_df["Open"]) * backtest_df["ML_Signal"].map({"CALL": 1, "PUT": -1})
         backtest_df["Cumulative"] = backtest_df["Pip_Return"].cumsum()
         st.write(f"Signals: {len(backtest_df)} | Accuracy: {backtest_df['Correct'].mean()*100:.2f}% | Net Pips: {backtest_df['Cumulative'].iloc[-1]:.2f}")
         st.line_chart(backtest_df["Cumulative"], height=200)
 
         if st.checkbox(f"📩 Send {symbol} daily summary", key=f"summary_{symbol}"):
-            msg = (f"📊 Daily Summary for {symbol}\n"
-                   f"Signals: {len(backtest_df)}\n"
-                   f"Accuracy: {backtest_df['Correct'].mean()*100:.2f}%\n"
+            msg = (f"📊 Daily Summary for {symbol}
+"
+                   f"Signals: {len(backtest_df)}
+"
+                   f"Accuracy: {backtest_df['Correct'].mean()*100:.2f}%
+"
                    f"Net Pips: {backtest_df['Cumulative'].iloc[-1]:.2f}")
             send_telegram_message(msg)
 
